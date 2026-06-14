@@ -81,6 +81,7 @@ const initialState: GameState = {
   })),
   preScheduledSegments: [],
   currentInterruptionRecords: [],
+  lastCateredTypes: [],
 }
 
 interface GameActions {
@@ -195,15 +196,20 @@ export const useGameStore = create<GameState & GameActions>()(
         }
 
         let availableStories: Story[]
+        let preSelectedStory: Story | null = null
+        let preSelectedBranch: StoryBranch | null = null
+
         if (state.preScheduledSegments.length > 0) {
-          const scheduled = state.preScheduledSegments
-            .sort((a, b) => a.order - b.order)
-            .map((seg) => {
-              const story = STORIES.find((s) => s.id === seg.storyId)
-              return story ?? null
-            })
-            .filter((s): s is Story => s !== null)
-          availableStories = scheduled.length > 0 ? scheduled : pickRandomStories(3)
+          const firstSeg = state.preScheduledSegments.sort((a, b) => a.order - b.order)[0]
+          const story = STORIES.find((s) => s.id === firstSeg.storyId)
+          const branch = story?.branches.find((b) => b.id === firstSeg.branchId)
+          if (story && branch) {
+            availableStories = [story]
+            preSelectedStory = story
+            preSelectedBranch = branch
+          } else {
+            availableStories = pickRandomStories(3)
+          }
         } else {
           availableStories = pickRandomStories(3)
         }
@@ -213,8 +219,8 @@ export const useGameStore = create<GameState & GameActions>()(
           customers,
           seats,
           availableStories,
-          currentStory: null,
-          currentBranch: null,
+          currentStory: preSelectedStory,
+          currentBranch: preSelectedBranch,
           storyProgress: 0,
           performanceActive: false,
           currentInterruption: null,
@@ -413,10 +419,22 @@ export const useGameStore = create<GameState & GameActions>()(
         }
 
         const branchTagsSet = new Set(state.currentBranch.tags)
+        const cateredTypesSet = new Set<CustomerType>()
+        CUSTOMER_TEMPLATES.forEach((tpl) => {
+          if (tpl.preferenceTags.some((tag) => branchTagsSet.has(tag))) {
+            cateredTypesSet.add(tpl.type)
+          }
+        })
+        const cateredTypes = Array.from(cateredTypesSet)
+
+        const lastCateredSet = new Set(state.lastCateredTypes)
+        const consecutiveCateredTypes = cateredTypes.filter((t) => lastCateredSet.has(t))
+        const isConsecutiveCatering = consecutiveCateredTypes.length > 0
+
         const updatedCustomerMoods = state.customerMoods.map((mood) => {
-          const tpl = CUSTOMER_TEMPLATES.find((t) => t.type === mood.type)
-          const isCatered = tpl?.preferenceTags.some((tag) => branchTagsSet.has(tag)) ?? false
-          if (isCatered) {
+          const isCateredTonight = cateredTypesSet.has(mood.type)
+
+          if (isCateredTonight) {
             const typeSatisfaction = avgSatisfactionByType[mood.type] ?? 50
             return {
               ...mood,
@@ -425,12 +443,19 @@ export const useGameStore = create<GameState & GameActions>()(
               lastCateredDay: state.day,
             }
           } else {
-            const neglectPenalty = mood.consecutiveNeglectDays >= 2 ? 8 : 5
-            return {
-              ...mood,
-              mood: Math.max(0, Math.min(100, mood.mood - neglectPenalty)),
-              consecutiveNeglectDays: mood.consecutiveNeglectDays + 1,
-              lastCateredDay: mood.lastCateredDay,
+            if (isConsecutiveCatering) {
+              const neglectPenalty = mood.consecutiveNeglectDays >= 2 ? 8 : 5
+              return {
+                ...mood,
+                mood: Math.max(0, Math.min(100, mood.mood - neglectPenalty)),
+                consecutiveNeglectDays: mood.consecutiveNeglectDays + 1,
+                lastCateredDay: mood.lastCateredDay,
+              }
+            } else {
+              return {
+                ...mood,
+                consecutiveNeglectDays: 0,
+              }
             }
           }
         })
@@ -447,6 +472,8 @@ export const useGameStore = create<GameState & GameActions>()(
           genealogyRecords: [...s.genealogyRecords, genealogyRecord],
           customerMoods: updatedCustomerMoods,
           currentInterruptionRecords: [],
+          lastCateredTypes: cateredTypes,
+          preScheduledSegments: [],
         }))
 
         get().addLedgerRecord('收入', '基础门票', result.baseEarnings, '晚场门票')
@@ -547,6 +574,7 @@ export const useGameStore = create<GameState & GameActions>()(
         genealogyRecords: s.genealogyRecords,
         customerMoods: s.customerMoods,
         preScheduledSegments: s.preScheduledSegments,
+        lastCateredTypes: s.lastCateredTypes,
       }),
     }
   )

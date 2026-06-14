@@ -191,6 +191,7 @@ export interface GameState {
   customerMoods: CustomerMood[]
   preScheduledSegments: PreScheduledSegment[]
   currentInterruptionRecords: InterruptionRecord[]
+  lastCateredTypes: CustomerType[]
 }
 
 export interface SettlementResult {

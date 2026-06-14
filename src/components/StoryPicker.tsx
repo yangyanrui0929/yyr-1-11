@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Scroll, Flame, Heart, Users, UserCheck, Sparkles, AlertTriangle, Frown } from 'lucide-react'
+import { Scroll, Flame, Heart, Users, UserCheck, Sparkles, AlertTriangle, Frown, Lock } from 'lucide-react'
 import { useGameStore } from '@/store/useGameStore'
 import type { Story, StoryBranch, CustomerType } from '@/types'
 import { calcStoryHeat } from '@/utils/storyHeat'
@@ -21,6 +21,7 @@ export default function StoryPicker() {
     startPerformance,
     customers,
     customerMoods,
+    preScheduledSegments,
   } = useGameStore()
 
   const [selectedStoryId, setSelectedStoryId] = useState<string | null>(null)
@@ -296,7 +297,14 @@ export default function StoryPicker() {
     <div className="scroll-panel">
       <div className="flex items-start justify-between gap-4 mb-4">
         <div>
-          <div className="text-sm text-ink-light">已选故事</div>
+          <div className="flex items-center gap-2">
+            <div className="text-sm text-ink-light">已选故事</div>
+            {preScheduledSegments.length > 0 && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sandal/20 text-sandal text-[10px] font-semibold">
+                <Lock className="w-3 h-3" /> 预排锁定
+              </span>
+            )}
+          </div>
           <div className="font-brush text-2xl text-sandal">{currentStory.title}</div>
           <div className="font-song text-lg text-ink mt-1">{currentBranch?.title}</div>
           {currentBranch && checkNeglectWarning(currentBranch.tags).length > 0 && (
