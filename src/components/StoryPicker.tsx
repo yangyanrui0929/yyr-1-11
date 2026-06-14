@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Scroll, Flame, Heart, Users, UserCheck, Sparkles } from 'lucide-react'
+import { Scroll, Flame, Heart, Users, UserCheck, Sparkles, AlertTriangle, Frown } from 'lucide-react'
 import { useGameStore } from '@/store/useGameStore'
-import type { Story, StoryBranch } from '@/types'
+import type { Story, StoryBranch, CustomerType } from '@/types'
 import { calcStoryHeat } from '@/utils/storyHeat'
 import { calcSerialExpect } from '@/utils/serialExpect'
 import { calcAvgTasteMatch } from '@/utils/tasteMatch'
+import { CUSTOMER_TEMPLATES } from '@/data/customers'
 
 export default function StoryPicker() {
   const {
@@ -19,10 +20,26 @@ export default function StoryPicker() {
     storyScores,
     startPerformance,
     customers,
+    customerMoods,
   } = useGameStore()
 
   const [selectedStoryId, setSelectedStoryId] = useState<string | null>(null)
   const seated = customers.filter((c) => c.seatId !== null)
+
+  const neglectedTypes: CustomerType[] = customerMoods
+    .filter((m) => m.consecutiveNeglectDays >= 2)
+    .map((m) => m.type)
+
+  const getAffectedCustomerTypes = (tags: string[]): CustomerType[] => {
+    return CUSTOMER_TEMPLATES.filter((tpl) =>
+      tpl.preferenceTags.some((tag) => tags.includes(tag))
+    ).map((tpl) => tpl.type)
+  }
+
+  const checkNeglectWarning = (tags: string[]): CustomerType[] => {
+    const willCater = new Set(getAffectedCustomerTypes(tags))
+    return neglectedTypes.filter((t) => !willCater.has(t))
+  }
 
   const selectedStory = selectedStoryId
     ? availableStories.find((s) => s.id === selectedStoryId)
@@ -52,6 +69,31 @@ export default function StoryPicker() {
         <p className="text-sm text-ink-light mb-4">
           从备选故事中挑选一篇，并选择讲述分支。注意匹配客人们的口味偏好！
         </p>
+
+        {neglectedTypes.length > 0 && (
+          <div className="card-ancient p-3 mb-4 border-cinnabar/40 bg-cinnabar/5">
+            <div className="flex items-start gap-2 text-sm">
+              <AlertTriangle className="w-5 h-5 text-cinnabar flex-shrink-0 mt-0.5" />
+              <div>
+                <div className="font-semibold text-cinnabar mb-1">客群冷落警告</div>
+                <div className="text-ink-light text-xs">
+                  以下客群已被连续冷落，情绪低落，若继续忽视可能影响生意：
+                  <div className="flex flex-wrap gap-1.5 mt-1">
+                    {neglectedTypes.map((t) => {
+                      const tpl = CUSTOMER_TEMPLATES.find((ct) => ct.type === t)
+                      const mood = customerMoods.find((m) => m.type === t)
+                      return (
+                        <span key={t} className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded bg-cinnabar/20 text-cinnabar text-xs">
+                          {tpl?.emoji} {t}（{mood?.consecutiveNeglectDays}日未照顾 · 情绪{mood?.mood}）
+                        </span>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
           <div className="lg:col-span-3">
@@ -115,6 +157,7 @@ export default function StoryPicker() {
                         <div className="flex flex-col gap-1.5">
                           {story.branches.map((b: StoryBranch) => {
                             const tm = tasteMatchForBranch(b)
+                            const stillNeglected = checkNeglectWarning(b.tags)
                             return (
                               <button
                                 key={b.id}
@@ -122,11 +165,17 @@ export default function StoryPicker() {
                                   e.stopPropagation()
                                   selectStory(story.id, b.id)
                                 }}
-                                className="w-full text-left px-3 py-2 rounded-lg bg-paper-dark/50 hover:bg-gold/30 text-sm transition-all border border-sandal/20 hover:border-gold"
+                                className={`w-full text-left px-3 py-2 rounded-lg transition-all border ${
+                                  stillNeglected.length > 0
+                                    ? 'bg-paper-dark/50 hover:bg-cinnabar/10 border-cinnabar/30 hover:border-cinnabar'
+                                    : 'bg-paper-dark/50 hover:bg-gold/30 border-sandal/20 hover:border-gold'
+                                }`}
                               >
                                 <div className="font-medium flex justify-between items-center">
                                   <span>{b.title}</span>
-                                  <span className="text-xs text-teal font-semibold">
+                                  <span className={`text-xs font-semibold ${
+                                    stillNeglected.length > 0 ? 'text-cinnabar' : 'text-tea'
+                                  }`}>
                                     匹配 {tm.value}
                                   </span>
                                 </div>
@@ -137,6 +186,15 @@ export default function StoryPicker() {
                                     </span>
                                   ))}
                                 </div>
+                                {stillNeglected.length > 0 && (
+                                  <div className="flex items-center gap-1 mt-1.5 text-[10px] text-cinnabar">
+                                    <Frown className="w-3 h-3" />
+                                    仍冷落：{stillNeglected.map((t) => {
+                                      const tpl = CUSTOMER_TEMPLATES.find((ct) => ct.type === t)
+                                      return <span key={t} className="inline-flex items-center gap-0.5">{tpl?.emoji}{t}</span>
+                                    }).reduce((prev: any, curr: any, i: number) => i === 0 ? [curr] : [...prev, '、', curr], [])}
+                                  </div>
+                                )}
                               </button>
                             )
                           })}
@@ -154,41 +212,76 @@ export default function StoryPicker() {
               <Users className="w-5 h-5" /> 今日宾客 ({seated.length}人)
             </h3>
 
-            <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
-              {seated.map((c) => (
-                <div
-                  key={c.id}
-                  className="p-2 bg-paper-dark/40 rounded-lg border border-sandal/20"
-                >
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-2xl">{c.emoji}</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-song font-medium text-sm truncate">
-                        {c.name}
-                      </div>
-                      <div className="text-[10px] text-ink-light">{c.type}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-xs text-gold font-semibold">
-                        💰 {c.wealth}
-                      </div>
-                      <div className="text-[10px] text-ink-light">
-                        慷慨 {'★'.repeat(c.generosity)}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {c.preferenceTags.map((tag) => (
-                      <span
-                        key={tag}
-                        className="text-[10px] px-1.5 py-0.5 rounded bg-tea-light/30 text-tea border border-tea/30"
-                      >
-                        #{tag}
-                      </span>
-                    ))}
-                  </div>
+            {neglectedTypes.length > 0 && (
+              <div className="mb-3 p-2 rounded border border-cinnabar/30 bg-cinnabar/5 text-[11px]">
+                <div className="flex items-center gap-1 text-cinnabar font-semibold mb-1">
+                  <AlertTriangle className="w-3 h-3" /> 情绪预警
                 </div>
-              ))}
+                <div className="flex flex-wrap gap-1 text-cinnabar">
+                  {neglectedTypes.map((t) => {
+                    const tpl = CUSTOMER_TEMPLATES.find((ct) => ct.type === t)
+                    return <span key={t}>{tpl?.emoji}{t}</span>
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
+              {seated.map((c) => {
+                const mood = customerMoods.find((m) => m.type === c.type)
+                const isLowMood = mood && mood.mood < 40
+                return (
+                  <div
+                    key={c.id}
+                    className={`p-2 rounded-lg border ${
+                      isLowMood ? 'bg-cinnabar/5 border-cinnabar/20' : 'bg-paper-dark/40 border-sandal/20'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-2xl">{c.emoji}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-song font-medium text-sm truncate">
+                          {c.name}
+                        </div>
+                        <div className="flex items-center gap-1 text-[10px] text-ink-light">
+                          <span>{c.type}</span>
+                          {mood && mood.consecutiveNeglectDays >= 2 && (
+                            <span className="text-cinnabar">（冷落{mood.consecutiveNeglectDays}日）</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-xs text-gold font-semibold">
+                          💰 {c.wealth}
+                        </div>
+                        <div className="text-[10px] text-ink-light">
+                          慷慨 {'★'.repeat(c.generosity)}
+                        </div>
+                      </div>
+                    </div>
+                    {mood && (
+                      <div className="h-1 bg-paper-dark rounded-full overflow-hidden mb-1.5">
+                        <div
+                          className={`h-full ${
+                            mood.mood >= 70 ? 'bg-tea' : mood.mood >= 40 ? 'bg-gold' : 'bg-cinnabar'
+                          }`}
+                          style={{ width: `${mood.mood}%` }}
+                        />
+                      </div>
+                    )}
+                    <div className="flex flex-wrap gap-1">
+                      {c.preferenceTags.map((tag) => (
+                        <span
+                          key={tag}
+                          className="text-[10px] px-1.5 py-0.5 rounded bg-tea-light/30 text-tea border border-tea/30"
+                        >
+                          #{tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
             </div>
 
             <div className="divider-ancient text-xs">口味统计</div>
@@ -206,6 +299,16 @@ export default function StoryPicker() {
           <div className="text-sm text-ink-light">已选故事</div>
           <div className="font-brush text-2xl text-sandal">{currentStory.title}</div>
           <div className="font-song text-lg text-ink mt-1">{currentBranch?.title}</div>
+          {currentBranch && checkNeglectWarning(currentBranch.tags).length > 0 && (
+            <div className="flex items-center gap-1 mt-2 text-xs text-cinnabar">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              本桥段仍会冷落：
+              {checkNeglectWarning(currentBranch.tags).map((t) => {
+                const tpl = CUSTOMER_TEMPLATES.find((ct) => ct.type === t)
+                return <span key={t} className="inline-flex items-center gap-0.5">{tpl?.emoji}{t}</span>
+              }).reduce((prev: any, curr: any, i: number) => i === 0 ? [curr] : [...prev, '、', curr], [])}
+            </div>
+          )}
         </div>
         <button onClick={startPerformance} className="btn-gold text-lg px-6 py-3">
           🎭 开讲！

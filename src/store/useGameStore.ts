@@ -14,13 +14,18 @@ import type {
   StoryRecord,
   ReputationHistory,
   Renovation,
+  GenealogyBranchRecord,
+  CustomerMood,
+  PreScheduledSegment,
+  InterruptionRecord,
+  CustomerType,
 } from '@/types'
 import { STORIES } from '@/data/stories'
 import { initSnacks } from '@/data/snacks'
 import { initSeats } from '@/data/seats'
 import { initRenovations, getUpgradeCost } from '@/data/renovations'
 import { INTERRUPTIONS } from '@/data/interruptions'
-import { generateRandomCustomers } from '@/data/customers'
+import { CUSTOMER_TEMPLATES, generateRandomCustomers } from '@/data/customers'
 import { calcSettlement } from '@/utils/settlement'
 
 const WEATHERS: Weather[] = ['晴', '晴', '晴', '云', '云', '雨', '雪']
@@ -67,6 +72,15 @@ const initialState: GameState = {
   storyScores: {},
   isSettlement: false,
   lastSettlement: null,
+  genealogyRecords: [],
+  customerMoods: CUSTOMER_TEMPLATES.map((t) => ({
+    type: t.type,
+    mood: 50,
+    consecutiveNeglectDays: 0,
+    lastCateredDay: null,
+  })),
+  preScheduledSegments: [],
+  currentInterruptionRecords: [],
 }
 
 interface GameActions {
@@ -82,6 +96,9 @@ interface GameActions {
   nextDay: () => void
   resetGame: () => void
   addLedgerRecord: (type: LedgerRecord['type'], category: string, amount: number, note: string) => void
+  preScheduleSegment: (storyId: string, branchId: string, order: number) => void
+  removePreScheduledSegment: (segmentId: string) => void
+  clearPreScheduledSegments: () => void
 }
 
 export const useGameStore = create<GameState & GameActions>()(
@@ -155,7 +172,16 @@ export const useGameStore = create<GameState & GameActions>()(
         if (state.reputation > 50) customerCount += 2
         if (state.reputation > 80) customerCount += 2
 
-        const customers = generateRandomCustomers(customerCount)
+        let customers = generateRandomCustomers(customerCount)
+        customers = customers.map((c) => {
+          const mood = state.customerMoods.find((m) => m.type === c.type)
+          const moodPenalty = mood ? Math.max(0, (50 - mood.mood) / 10) : 0
+          return {
+            ...c,
+            satisfaction: Math.max(10, Math.min(90, 50 - moodPenalty * 5 + (Math.random() * 10 - 5))),
+          }
+        })
+
         const seats = [...state.seats].map((s) => ({ ...s, occupied: false }))
         const sortedSeats = [...seats].sort((a, b) => {
           const order: Record<Seat['tier'], number> = { 贵宾: 0, 雅座: 1, 普通: 2 }
@@ -168,7 +194,19 @@ export const useGameStore = create<GameState & GameActions>()(
           if (idx >= 0) seats[idx].occupied = true
         }
 
-        const availableStories = pickRandomStories(3)
+        let availableStories: Story[]
+        if (state.preScheduledSegments.length > 0) {
+          const scheduled = state.preScheduledSegments
+            .sort((a, b) => a.order - b.order)
+            .map((seg) => {
+              const story = STORIES.find((s) => s.id === seg.storyId)
+              return story ?? null
+            })
+            .filter((s): s is Story => s !== null)
+          availableStories = scheduled.length > 0 ? scheduled : pickRandomStories(3)
+        } else {
+          availableStories = pickRandomStories(3)
+        }
 
         set({
           phase: 'night',
@@ -180,6 +218,7 @@ export const useGameStore = create<GameState & GameActions>()(
           storyProgress: 0,
           performanceActive: false,
           currentInterruption: null,
+          currentInterruptionRecords: [],
         })
       },
 
@@ -244,11 +283,24 @@ export const useGameStore = create<GameState & GameActions>()(
 
         const newReputation = Math.max(0, Math.min(100, state.reputation + option.reputationEffect))
 
+        const interruptionRecord: InterruptionRecord = {
+          id: uid(),
+          interruptionId: state.currentInterruption.id,
+          customerType: state.currentInterruption.customerType,
+          content: state.currentInterruption.content,
+          chosenOptionText: option.text,
+          satisfactionEffect: option.satisfactionEffect,
+          reputationEffect: option.reputationEffect,
+          goldEffect: option.goldEffect,
+          timestamp: Date.now(),
+        }
+
         set({
           currentInterruption: null,
           customers,
           gold: state.gold + option.goldEffect,
           reputation: newReputation,
+          currentInterruptionRecords: [...state.currentInterruptionRecords, interruptionRecord],
         })
 
         if (option.goldEffect !== 0) {
@@ -302,6 +354,46 @@ export const useGameStore = create<GameState & GameActions>()(
           avgSatisfaction: result.avgSatisfaction,
         }
 
+        const seatedCustomers = state.customers.filter((c) => c.seatId !== null)
+        const satisfactionByType: Partial<Record<CustomerType, number[]>> = {}
+        seatedCustomers.forEach((c) => {
+          if (!satisfactionByType[c.type]) satisfactionByType[c.type] = []
+          satisfactionByType[c.type]!.push(c.satisfaction)
+        })
+        const avgSatisfactionByType: Partial<Record<CustomerType, number>> = {}
+        Object.entries(satisfactionByType).forEach(([type, scores]) => {
+          avgSatisfactionByType[type as CustomerType] =
+            Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
+        })
+
+        const drivingCustomerTypes: CustomerType[] = (
+          Object.entries(avgSatisfactionByType) as [CustomerType, number][]
+        )
+          .filter(([, score]) => score >= 70)
+          .map(([type]) => type)
+
+        const branchTags = state.currentBranch.tags
+        const interruptionTags = state.currentInterruptionRecords
+          .filter((r) => r.reputationEffect > 0)
+          .map((r) => '妙答' + r.customerType)
+        const highSatTags = result.avgSatisfaction >= 80 ? ['满堂喝彩'] : result.avgSatisfaction >= 60 ? ['好评如潮'] : []
+        const lowSatTags = result.avgSatisfaction < 40 ? ['冷场'] : []
+        const earningsTags = result.totalEarnings >= 150 ? ['日进斗金'] : result.totalEarnings >= 80 ? ['小有进账'] : []
+        const reputationTags = [...branchTags, ...interruptionTags, ...highSatTags, ...lowSatTags, ...earningsTags].slice(0, 6)
+
+        const genealogyRecord: GenealogyBranchRecord = {
+          day: state.day,
+          storyId: state.currentStory.id,
+          branchId: state.currentBranch.id,
+          drivingCustomerTypes,
+          interruptionRecords: [...state.currentInterruptionRecords],
+          reputationTags,
+          audienceCount: result.audienceCount,
+          earnings: result.totalEarnings,
+          avgSatisfaction: result.avgSatisfaction,
+          avgSatisfactionByType,
+        }
+
         const newStoryScores = { ...state.storyScores }
         if (!newStoryScores[state.currentStory.id]) {
           newStoryScores[state.currentStory.id] = []
@@ -320,6 +412,29 @@ export const useGameStore = create<GameState & GameActions>()(
           reason: result.reputationDelta >= 0 ? '说书好评' : '差评影响',
         }
 
+        const branchTagsSet = new Set(state.currentBranch.tags)
+        const updatedCustomerMoods = state.customerMoods.map((mood) => {
+          const tpl = CUSTOMER_TEMPLATES.find((t) => t.type === mood.type)
+          const isCatered = tpl?.preferenceTags.some((tag) => branchTagsSet.has(tag)) ?? false
+          if (isCatered) {
+            const typeSatisfaction = avgSatisfactionByType[mood.type] ?? 50
+            return {
+              ...mood,
+              mood: Math.max(0, Math.min(100, mood.mood + Math.max(-5, Math.min(10, typeSatisfaction - 50)))),
+              consecutiveNeglectDays: 0,
+              lastCateredDay: state.day,
+            }
+          } else {
+            const neglectPenalty = mood.consecutiveNeglectDays >= 2 ? 8 : 5
+            return {
+              ...mood,
+              mood: Math.max(0, Math.min(100, mood.mood - neglectPenalty)),
+              consecutiveNeglectDays: mood.consecutiveNeglectDays + 1,
+              lastCateredDay: mood.lastCateredDay,
+            }
+          }
+        })
+
         set((s) => ({
           isSettlement: true,
           lastSettlement: result,
@@ -329,6 +444,9 @@ export const useGameStore = create<GameState & GameActions>()(
           lastStoryDay: { ...s.lastStoryDay, [state.currentStory!.id]: state.day },
           storyScores: newStoryScores,
           reputationHistory: [...s.reputationHistory, repHistory],
+          genealogyRecords: [...s.genealogyRecords, genealogyRecord],
+          customerMoods: updatedCustomerMoods,
+          currentInterruptionRecords: [],
         }))
 
         get().addLedgerRecord('收入', '基础门票', result.baseEarnings, '晚场门票')
@@ -385,6 +503,32 @@ export const useGameStore = create<GameState & GameActions>()(
           ],
         }))
       },
+
+      preScheduleSegment: (storyId: string, branchId: string, order: number) => {
+        set((s) => {
+          const existing = s.preScheduledSegments.filter(
+            (seg) => !(seg.storyId === storyId && seg.branchId === branchId)
+          )
+          const newSeg: PreScheduledSegment = {
+            id: `seg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            storyId,
+            branchId,
+            order,
+          }
+          const sorted = [...existing, newSeg].sort((a, b) => a.order - b.order)
+          return { preScheduledSegments: sorted }
+        })
+      },
+
+      removePreScheduledSegment: (segmentId: string) => {
+        set((s) => ({
+          preScheduledSegments: s.preScheduledSegments.filter((seg) => seg.id !== segmentId),
+        }))
+      },
+
+      clearPreScheduledSegments: () => {
+        set({ preScheduledSegments: [] })
+      },
     }),
     {
       name: 'teahouse-storyteller-save',
@@ -400,6 +544,9 @@ export const useGameStore = create<GameState & GameActions>()(
         reputationHistory: s.reputationHistory,
         lastStoryDay: s.lastStoryDay,
         storyScores: s.storyScores,
+        genealogyRecords: s.genealogyRecords,
+        customerMoods: s.customerMoods,
+        preScheduledSegments: s.preScheduledSegments,
       }),
     }
   )

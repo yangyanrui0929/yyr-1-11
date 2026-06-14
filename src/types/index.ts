@@ -108,6 +108,45 @@ export interface LedgerRecord {
   timestamp: number
 }
 
+export interface InterruptionRecord {
+  id: string
+  interruptionId: string
+  customerType: CustomerType
+  content: string
+  chosenOptionText: string
+  satisfactionEffect: number
+  reputationEffect: number
+  goldEffect: number
+  timestamp: number
+}
+
+export interface GenealogyBranchRecord {
+  day: number
+  storyId: string
+  branchId: string
+  drivingCustomerTypes: CustomerType[]
+  interruptionRecords: InterruptionRecord[]
+  reputationTags: string[]
+  audienceCount: number
+  earnings: number
+  avgSatisfaction: number
+  avgSatisfactionByType: Partial<Record<CustomerType, number>>
+}
+
+export interface CustomerMood {
+  type: CustomerType
+  mood: number
+  consecutiveNeglectDays: number
+  lastCateredDay: number | null
+}
+
+export interface PreScheduledSegment {
+  id: string
+  storyId: string
+  branchId: string
+  order: number
+}
+
 export interface StoryRecord {
   day: number
   storyId: string
@@ -148,6 +187,10 @@ export interface GameState {
   storyScores: Record<string, number[]>
   isSettlement: boolean
   lastSettlement: SettlementResult | null
+  genealogyRecords: GenealogyBranchRecord[]
+  customerMoods: CustomerMood[]
+  preScheduledSegments: PreScheduledSegment[]
+  currentInterruptionRecords: InterruptionRecord[]
 }
 
 export interface SettlementResult {
